@@ -87,16 +87,20 @@ impl Server {
                         ActionResult::Redirect(url) => HttpResponse::Found()
                             .append_header(("Location", url))
                             .finish(),
-                        ActionResult::File(path) => match std::fs::read(&path) {
-                            Ok(bytes) => {
-                                let content_type =
-                                    mime_guess::from_path(&path).first_or_octet_stream();
-                                HttpResponse::Ok()
-                                    .content_type(content_type.as_ref())
-                                    .body(bytes)
+                        ActionResult::File(path) => {
+                            let path = format!("wwwroot/{}", path);
+                            match std::fs::read(&path) {
+                                Ok(bytes) => {
+                                    let content_type =
+                                        mime_guess::from_path(&path).first_or_octet_stream();
+                                    HttpResponse::Ok()
+                                        .content_type(content_type.as_ref())
+                                        .body(bytes)
+                                }
+                                Err(_) => HttpResponse::NotFound().body("<h1>404 Not Found</h1>"),
                             }
-                            Err(_) => HttpResponse::NotFound().body("<h1>404 Not Found</h1>"),
-                        },
+                        }
+
                         ActionResult::NotFound => {
                             HttpResponse::NotFound().body("<h1>404 Not Found</h1>")
                         }
