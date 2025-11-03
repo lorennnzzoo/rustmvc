@@ -2,16 +2,23 @@ use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 use std::collections::HashMap;
 use std::sync::Arc;
 mod controllers;
+pub use askama;
+pub use askama::Template;
 pub use controllers::*;
+pub use serde::Serialize;
+pub type ArcRenderModel = Arc<dyn RenderModel>;
+
 #[derive(Clone)]
 pub enum ActionResult {
     Html(String),
-    View(String),
+    View(ArcRenderModel),
     Redirect(String),
     File(String),
     NotFound,
 }
-
+pub trait RenderModel: Send + Sync {
+    fn render_html(&self) -> Result<String, askama::Error>;
+}
 pub type ActionFn = Arc<dyn Fn(HashMap<String, String>) -> ActionResult + Send + Sync>;
 
 pub struct Route {
@@ -75,15 +82,15 @@ impl Server {
                         ActionResult::Html(s) => {
                             HttpResponse::Ok().content_type("text/html").body(s)
                         }
-                        ActionResult::View(name) => {
-                            let path = format!("views/{}.html", name);
-                            match std::fs::read_to_string(&path) {
-                                Ok(content) => {
-                                    HttpResponse::Ok().content_type("text/html").body(content)
-                                }
-                                Err(_) => HttpResponse::NotFound().body("<h1>404 Not Found</h1>"),
+                        ActionResult::View(renderer_arc) => match renderer_arc.render_html() {
+                            Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
+                            Err(e) => {
+                                eprintln!("Askama Rendering Error: {}", e);
+                                HttpResponse::InternalServerError()
+                                    .body(format!("<h1>Template Rendering Error: {}</h1>", e))
                             }
-                        }
+                        },
+
                         ActionResult::Redirect(url) => HttpResponse::Found()
                             .append_header(("Location", url))
                             .finish(),
