@@ -6,6 +6,9 @@ pub use controllers::*;
 #[derive(Clone)]
 pub enum ActionResult {
     Html(String),
+    View(String),
+    Redirect(String),
+    File(String),
     NotFound,
 }
 
@@ -72,6 +75,28 @@ impl Server {
                         ActionResult::Html(s) => {
                             HttpResponse::Ok().content_type("text/html").body(s)
                         }
+                        ActionResult::View(name) => {
+                            let path = format!("views/{}.html", name);
+                            match std::fs::read_to_string(&path) {
+                                Ok(content) => {
+                                    HttpResponse::Ok().content_type("text/html").body(content)
+                                }
+                                Err(_) => HttpResponse::NotFound().body("<h1>404 Not Found</h1>"),
+                            }
+                        }
+                        ActionResult::Redirect(url) => HttpResponse::Found()
+                            .append_header(("Location", url))
+                            .finish(),
+                        ActionResult::File(path) => match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                let content_type =
+                                    mime_guess::from_path(&path).first_or_octet_stream();
+                                HttpResponse::Ok()
+                                    .content_type(content_type.as_ref())
+                                    .body(bytes)
+                            }
+                            Err(_) => HttpResponse::NotFound().body("<h1>404 Not Found</h1>"),
+                        },
                         ActionResult::NotFound => {
                             HttpResponse::NotFound().body("<h1>404 Not Found</h1>")
                         }
