@@ -5,7 +5,7 @@ mod controllers;
 pub use askama;
 pub use askama::Template;
 pub use controllers::*;
-pub use serde::Serialize;
+// pub use serde::Serialize;
 pub type ArcRenderModel = Arc<dyn RenderModel>;
 
 #[derive(Clone)]

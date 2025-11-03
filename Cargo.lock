@@ -1004,7 +1004,6 @@ dependencies = [
  "actix-web",
  "askama",
  "mime_guess",
- "serde",
 ]
 
 [[package]]
