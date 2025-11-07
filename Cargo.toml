@@ -1,6 +1,6 @@
 [package]
 name = "rustmvc"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["lorenzo"]
 description = "A lightweight MVC framework for Rust"

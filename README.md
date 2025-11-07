@@ -17,7 +17,7 @@ Add RustMVC to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustmvc = "0.1.0"
+rustmvc = "0.1.1"
 actix-web = "4.11.0"
 askama = "0.14.0"
 ```
