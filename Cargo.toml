@@ -9,7 +9,6 @@ repository = "https://github.com/lorennnzzoo/rustmvc"
 homepage = "https://github.com/lorennnzzoo/rustmvc"
 documentation = "https://docs.rs/rustmvc"
 keywords = ["mvc", "web", "actix", "rust"]
-categories = ["web-programming", "web-servers"]
 readme = "README.md"
 
 
