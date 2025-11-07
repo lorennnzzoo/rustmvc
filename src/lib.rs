@@ -1,14 +1,11 @@
 use actix_web::http::header::HeaderMap;
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
-use std::collections::HashMap;
-use std::sync::Arc;
-mod controllers;
 use actix_web::web::Bytes;
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 pub use askama;
 pub use askama::Template;
-pub use controllers::*;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-// pub use serde::Serialize;
 pub type ArcRenderModel = Arc<dyn RenderModel>;
 
 #[derive(Clone)]
@@ -47,10 +44,34 @@ pub struct Server {
 
 impl Server {
     pub fn new() -> Self {
-        Self {
+        let mut server = Self {
             routes: Vec::new(),
             middlewares: Vec::new(),
-        }
+        };
+        server.add_middleware(|ctx, next| {
+            println!("--- Incoming Request ---");
+            println!("Path: {}", ctx.path);
+            println!("Query Params: {:?}", ctx.params);
+            println!("Headers:");
+            for (key, value) in ctx.headers.iter() {
+                println!("  {}: {:?}", key, value);
+            }
+            println!("------------------------");
+
+            let result = next(ctx.clone());
+
+            match &result {
+                ActionResult::Html(_) => println!("Response: Html"),
+                ActionResult::View(_) => println!("Response: View"),
+                ActionResult::Redirect(url) => println!("Response: Redirect to {}", url),
+                ActionResult::File(path) => println!("Response: File {}", path),
+                ActionResult::NotFound => println!("Response: NotFound"),
+            }
+            println!("--- End of Request ---\n");
+
+            result
+        });
+        server
     }
     pub fn add_middleware<F>(&mut self, mw: F)
     where
