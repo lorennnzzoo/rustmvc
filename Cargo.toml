@@ -1,7 +1,17 @@
 [package]
 name = "rustmvc"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["lorenzo"]
+description = "A lightweight MVC framework for Rust"
+license = "MIT"
+repository = "https://github.com/lorennnzzoo/rustmvc"
+homepage = "https://github.com/lorennnzzoo/rustmvc"
+documentation = "https://docs.rs/rustmvc"
+keywords = ["mvc", "web", "actix", "rust"]
+categories = ["web-programming", "web-servers"]
+readme = "README.md"
+
 
 [dependencies]
 actix-web = "4.11.0"
