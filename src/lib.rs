@@ -1,3 +1,4 @@
+use actix_web::http::header::HeaderMap;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,6 +8,14 @@ pub use askama::Template;
 pub use controllers::*;
 // pub use serde::Serialize;
 pub type ArcRenderModel = Arc<dyn RenderModel>;
+
+#[derive(Clone)]
+pub struct RequestContext {
+    pub params: HashMap<String, String>,
+    pub headers: HeaderMap,
+    pub path: String,
+    // you can add more fields like cookies, method, body, etc.
+}
 
 #[derive(Clone)]
 pub enum ActionResult {
@@ -19,7 +28,10 @@ pub enum ActionResult {
 pub trait RenderModel: Send + Sync {
     fn render_html(&self) -> Result<String, askama::Error>;
 }
-pub type ActionFn = Arc<dyn Fn(HashMap<String, String>) -> ActionResult + Send + Sync>;
+pub type ActionFn = Arc<dyn Fn(RequestContext) -> ActionResult + Send + Sync + 'static>;
+
+pub type MiddlewareFn =
+    Arc<dyn Fn(RequestContext, ActionFn) -> ActionResult + Send + Sync + 'static>;
 
 pub struct Route {
     pub path: String,
@@ -28,16 +40,25 @@ pub struct Route {
 
 pub struct Server {
     routes: Vec<Route>,
+    middlewares: Vec<MiddlewareFn>,
 }
 
 impl Server {
     pub fn new() -> Self {
-        Self { routes: Vec::new() }
+        Self {
+            routes: Vec::new(),
+            middlewares: Vec::new(),
+        }
     }
-
+    pub fn add_middleware<F>(&mut self, mw: F)
+    where
+        F: Fn(RequestContext, ActionFn) -> ActionResult + Send + Sync + 'static,
+    {
+        self.middlewares.push(Arc::new(mw));
+    }
     pub fn add_route<F>(&mut self, path: &str, action: F)
     where
-        F: Fn(HashMap<String, String>) -> ActionResult + Send + Sync + 'static,
+        F: Fn(RequestContext) -> ActionResult + Send + Sync + 'static,
     {
         self.routes.push(Route {
             path: path.to_string(),
@@ -45,13 +66,23 @@ impl Server {
         });
     }
 
-    fn handle_request(&self, path: &str, params: HashMap<String, String>) -> ActionResult {
-        for route in &self.routes {
-            if route.path == path {
-                return (route.action)(params);
-            }
+    fn handle_request(&self, ctx: RequestContext) -> ActionResult {
+        let route = match self.routes.iter().find(|r| r.path == ctx.path) {
+            Some(r) => r.action.clone(),
+            None => return ActionResult::NotFound,
+        };
+
+        let mut next: ActionFn = route;
+
+        for mw in self.middlewares.iter().rev() {
+            let current_next = next.clone();
+            let mw_clone = mw.clone();
+            next = Arc::new(move |ctx: RequestContext| -> ActionResult {
+                mw_clone(ctx, current_next.clone())
+            }) as ActionFn;
         }
-        ActionResult::NotFound
+
+        next(ctx)
     }
 
     pub async fn start(self, addr: &str) -> std::io::Result<()> {
@@ -75,8 +106,13 @@ impl Server {
                         params.insert(key.to_string(), value.to_string());
                     }
 
-                    let path = req.path();
-                    let result = srv.handle_request(path, params);
+                    let ctx = RequestContext {
+                        path: req.path().to_string(),
+                        headers: req.headers().clone(),
+                        params,
+                    };
+
+                    let result = srv.handle_request(ctx);
 
                     let body = match result {
                         ActionResult::Html(s) => {

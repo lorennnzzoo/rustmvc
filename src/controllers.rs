@@ -1,5 +1,5 @@
 use crate::ActionResult;
-use std::collections::HashMap;
+use crate::RequestContext;
 use std::sync::Arc;
 pub struct HomeController;
 use crate::RenderModel;
@@ -24,7 +24,7 @@ impl RenderModel for HomeModel {
     }
 }
 impl HomeController {
-    pub fn index(_params: HashMap<String, String>) -> ActionResult {
+    pub fn index(_request_context: RequestContext) -> ActionResult {
         let model = HomeModel {
             title: "Rust MVC Askama Demo".to_string(),
             message: "This is a dynamic page with Rust logic inside the template.".to_string(),
