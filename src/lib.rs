@@ -4,8 +4,9 @@
 //! Provides routing, middlewares, request context, and response handling.
 
 use actix_web::http::header::HeaderMap;
+use actix_web::http::Method;
 use actix_web::web::Bytes;
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 pub use askama;
 pub use askama::Template;
 use std::collections::HashMap;
@@ -25,6 +26,8 @@ pub struct RequestContext {
     pub path: String,
     /// Request body bytes (useful for POST/PUT requests)
     pub body: Vec<u8>,
+    ///Http Method
+    pub method: HttpMethod,
 }
 
 /// Represents the possible responses an action can return.
@@ -40,6 +43,8 @@ pub enum ActionResult {
     File(String),
     /// 404 Not Found
     NotFound,
+    ///Pay Load Too Large
+    PayloadTooLarge(String),
 }
 /// Trait implemented by models that can render themselves to HTML.
 pub trait RenderModel: Send + Sync {
@@ -52,6 +57,28 @@ pub type ActionFn = Arc<dyn Fn(RequestContext) -> ActionResult + Send + Sync + '
 /// Type of a middleware function
 pub type MiddlewareFn =
     Arc<dyn Fn(RequestContext, ActionFn) -> ActionResult + Send + Sync + 'static>;
+///Rules for a route to pass before proceeding to action
+#[derive(Clone)]
+pub enum RouteRules {
+    Authorize,
+    AllowAnonymous,
+    Roles(Vec<String>),
+    RequestSizeLimit(usize),
+}
+/// Http Methods
+#[derive(Clone, PartialEq)]
+pub enum HttpMethod {
+    GET,
+    POST,
+    PUT,
+    DELETE,
+    PATCH,
+    OPTIONS,
+    HEAD,
+    TRACE,
+    CONNECT,
+    NotSupported,
+}
 
 /// Represents a route in the server
 pub struct Route {
@@ -59,6 +86,10 @@ pub struct Route {
     pub path: String,
     /// The action to execute when the route is matched
     pub action: ActionFn,
+    /// Route Rules
+    pub rules: Vec<RouteRules>,
+    /// Http Method
+    pub method: HttpMethod,
 }
 /// The main server struct of RustMVC.
 ///
@@ -105,6 +136,7 @@ impl Server {
                 ActionResult::Redirect(url) => println!("Response: Redirect to {}", url),
                 ActionResult::File(path) => println!("Response: File {}", path),
                 ActionResult::NotFound => println!("Response: NotFound"),
+                ActionResult::PayloadTooLarge(content) => println!("Response: {:?}", content),
             }
             println!("--- End of Request ---\n");
 
@@ -135,24 +167,55 @@ impl Server {
     /// ```rust
     /// server.add_route("/", HomeController::index);
     /// ```
-    pub fn add_route<F>(&mut self, path: &str, action: F)
-    where
+    pub fn add_route<F>(
+        &mut self,
+        path: &str,
+        action: F,
+        method: HttpMethod,
+        rules: Vec<RouteRules>,
+    ) where
         F: Fn(RequestContext) -> ActionResult + Send + Sync + 'static,
     {
         self.routes.push(Route {
             path: path.to_string(),
             action: Arc::new(action),
+            method,
+            rules,
         });
     }
     /// Internal function to handle an incoming request
     fn handle_request(&self, ctx: RequestContext) -> ActionResult {
-        let route = match self.routes.iter().find(|r| r.path == ctx.path) {
-            Some(r) => r.action.clone(),
+        let route = match self
+            .routes
+            .iter()
+            .find(|r| r.path == ctx.path && r.method == ctx.method)
+        {
+            Some(r) => r,
             None => return ActionResult::NotFound,
         };
 
+        // Check NotSupported Routes
+        if route.method == HttpMethod::NotSupported {
+            return ActionResult::NotFound;
+        }
+
+        // Check route rules first
+        for rule in route.rules.clone() {
+            match rule {
+                RouteRules::RequestSizeLimit(limit) => {
+                    if ctx.body.len() > limit {
+                        return ActionResult::PayloadTooLarge(format!(
+                            "Request to route '{}' exceeded the allowed size: {} bytes",
+                            route.path, limit
+                        ));
+                    }
+                }
+                _ => (),
+            }
+        }
+
         // Compose middlewares
-        let mut next: ActionFn = route;
+        let mut next: ActionFn = route.action.clone();
         for mw in self.middlewares.iter().rev() {
             let current_next = next.clone();
             let mw_clone = mw.clone();
@@ -193,11 +256,25 @@ impl Server {
                             params.insert(key.to_string(), value.to_string());
                         }
 
+                        let mapped_methods = match req.method() {
+                            &Method::GET => HttpMethod::GET,
+                            &Method::POST => HttpMethod::POST,
+                            &Method::PUT => HttpMethod::PUT,
+                            &Method::DELETE => HttpMethod::DELETE,
+                            &Method::PATCH => HttpMethod::PATCH,
+                            &Method::CONNECT => HttpMethod::CONNECT,
+                            &Method::OPTIONS => HttpMethod::OPTIONS,
+                            &Method::HEAD => HttpMethod::HEAD,
+                            &Method::TRACE => HttpMethod::TRACE,
+                            _ => HttpMethod::NotSupported,
+                        };
+
                         let ctx = RequestContext {
                             path: req.path().to_string(),
                             headers: req.headers().clone(),
                             params,
                             body: body.to_vec(),
+                            method: mapped_methods,
                         };
 
                         let result = srv.handle_request(ctx);
@@ -232,6 +309,9 @@ impl Server {
                                         HttpResponse::NotFound().body("<h1>404 Not Found</h1>")
                                     }
                                 }
+                            }
+                            ActionResult::PayloadTooLarge(body) => {
+                                HttpResponse::PayloadTooLarge().body(body)
                             }
 
                             ActionResult::NotFound => {
