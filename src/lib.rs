@@ -12,6 +12,9 @@ pub use askama::Template;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::authentication::{AuthConfig, Claims};
+pub mod authentication;
+
 /// Shared pointer to a type implementing the `RenderModel` trait.
 pub type ArcRenderModel = Arc<dyn RenderModel>;
 
@@ -43,8 +46,12 @@ pub enum ActionResult {
     File(String),
     /// 404 Not Found
     NotFound,
-    ///Pay Load Too Large
+    /// Pay Load Too Large
     PayloadTooLarge(String),
+    /// UnAuthorized
+    UnAuthorized(String),
+    /// Forbidden
+    Forbidden(String),
 }
 /// Trait implemented by models that can render themselves to HTML.
 pub trait RenderModel: Send + Sync {
@@ -58,7 +65,7 @@ pub type ActionFn = Arc<dyn Fn(RequestContext) -> ActionResult + Send + Sync + '
 pub type MiddlewareFn =
     Arc<dyn Fn(RequestContext, ActionFn) -> ActionResult + Send + Sync + 'static>;
 ///Rules for a route to pass before proceeding to action
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RouteRules {
     Authorize,
     AllowAnonymous,
@@ -81,6 +88,7 @@ pub enum HttpMethod {
 }
 
 /// Represents a route in the server
+#[derive(Clone)]
 pub struct Route {
     /// The path to match (e.g., `/about`)
     pub path: String,
@@ -103,6 +111,8 @@ pub struct Server {
     /// Middlewares are functions that wrap around route execution,
     /// allowing logging, authentication, request modification, etc.
     middlewares: Vec<MiddlewareFn>,
+    /// Auth Config to set secret key
+    auth_config: Option<Arc<AuthConfig>>,
 }
 
 impl Server {
@@ -116,6 +126,7 @@ impl Server {
         let mut server = Self {
             routes: Vec::new(),
             middlewares: Vec::new(),
+            auth_config: None,
         };
         // Default logging middleware
         server.add_middleware(|ctx, next| {
@@ -137,11 +148,55 @@ impl Server {
                 ActionResult::File(path) => println!("Response: File {}", path),
                 ActionResult::NotFound => println!("Response: NotFound"),
                 ActionResult::PayloadTooLarge(content) => println!("Response: {:?}", content),
+                ActionResult::Forbidden(content) => println!("Response: {:?}", content),
+                ActionResult::UnAuthorized(content) => println!("Response: {:?}", content),
             }
             println!("--- End of Request ---\n");
 
             result
         });
+
+        let routes = server.routes.clone();
+
+        let auth_config = server.auth_config.clone();
+
+        server.add_middleware(move |ctx, next| {
+            for route in &routes {
+                if route.path == ctx.path {
+                    if route.rules.contains(&RouteRules::Authorize) {
+                        let auth = match &auth_config {
+                            Some(a) => a.clone(),
+                            None => return ActionResult::UnAuthorized("No auth config".into()),
+                        };
+
+                        if let Some(auth_header) = ctx.headers.get("Authorization") {
+                            let token = auth_header.to_str().unwrap_or("").replace("Bearer ", "");
+                            if let Ok(token_data) = auth.validate_token(&token) {
+                                if let Some(RouteRules::Roles(required_roles)) = route
+                                    .rules
+                                    .iter()
+                                    .find(|r| matches!(r, RouteRules::Roles(_)))
+                                {
+                                    let user_roles = &token_data.claims.roles;
+                                    if !required_roles.iter().all(|r| user_roles.contains(r)) {
+                                        return ActionResult::Forbidden(
+                                            "Forbidden: insufficient roles".into(),
+                                        );
+                                    }
+                                }
+                            } else {
+                                return ActionResult::UnAuthorized("Invalid token".into());
+                            }
+                        } else {
+                            return ActionResult::UnAuthorized("Missing token".into());
+                        }
+                    }
+                }
+            }
+
+            next(ctx)
+        });
+
         server
     }
     /// Add a middleware to the server
@@ -160,6 +215,19 @@ impl Server {
         F: Fn(RequestContext, ActionFn) -> ActionResult + Send + Sync + 'static,
     {
         self.middlewares.push(Arc::new(mw));
+    }
+    /// Set Auth Config
+    pub fn set_auth_config(&mut self, config: AuthConfig) {
+        self.auth_config = Some(Arc::new(config));
+    }
+    pub fn get_auth_config(&self) -> Option<Arc<AuthConfig>> {
+        self.auth_config.clone()
+    }
+    /// Helper to generate token from user-provided claims
+    pub fn generate_token(&self, claims: Claims, expires_in_secs: i64) -> Option<String> {
+        self.auth_config
+            .as_ref()
+            .map(|cfg| cfg.generate_token(&claims.sub, claims.roles.clone(), expires_in_secs))
     }
     /// Register a route with the server
     ///
@@ -314,6 +382,10 @@ impl Server {
                                 HttpResponse::PayloadTooLarge().body(body)
                             }
 
+                            ActionResult::Forbidden(body) => HttpResponse::Forbidden().body(body),
+                            ActionResult::UnAuthorized(body) => {
+                                HttpResponse::Unauthorized().body(body)
+                            }
                             ActionResult::NotFound => {
                                 HttpResponse::NotFound().body("<h1>404 Not Found</h1>")
                             }
