@@ -1,276 +1,317 @@
+
 # RustMVC
+A lightweight MVC web framework for Rust, built on top of **Actix Web** and **Askama** templates.
+`rustmvc` helps you organize your Rust web applications using the familiar **Model–View–Controller** pattern while keeping it fast, simple, and extensible.
 
-A lightweight MVC (Model-View-Controller) framework for Rust, built on top of Actix Web and Askama templates. RustMVC provides a simple, intuitive API for building web applications with routing, middleware support, and template rendering.
+***
 
-## Features
+### Features
+- Actix Web-based routing and async HTTP handling
+- Askama templating support (for safe, fast server-side rendering)
+- Built-in **middleware** system
+- Simple **request context**
+- Route-based **rules** like authorization, size limits, and role restrictions
+- Extensible **actions** and **responses**
 
-- **Simple Routing**: Register routes with path patterns and controller actions
-- **Middleware Support**: Add custom middleware for logging, authentication, and request processing
-- **Template Rendering**: Built-in support for Askama templates
-- **Request Context**: Easy access to query parameters, headers, and request body
-- **Multiple Response Types**: HTML, views, redirects, static files, and 404 handling
-- **Built-in Logging**: Default middleware for request/response logging
+***
 
-## Installation
-
-Add RustMVC to your `Cargo.toml`:
+### Installation
 
 ```toml
 [dependencies]
-rustmvc = "0.1.1"
 actix-web = "4.11.0"
 askama = "0.14.0"
+mime_guess = "2.0.5"
+rustmvc = { path = "./rustmvc" } # adjust path based on your workspace
 ```
 
-## Quick Start
+***
 
-Here's a simple example to get you started:
+### Quick Start Example
+
+Below is a minimal example that defines a small MVC app using `rustmvc`.
 
 ```rust
-use rustmvc::{Server, RequestContext, ActionResult, Template};
-use std::sync::Arc;
-
-// Define a view model with Askama template
-#[derive(Template)]
-#[template(path = "home.html")]
-struct HomeView {
-    title: String,
-}
-
-impl rustmvc::RenderModel for HomeView {
-    fn render_html(&self) -> Result<String, askama::Error> {
-        self.render()
-    }
-}
-
-// Controller action
-fn index(_ctx: RequestContext) -> ActionResult {
-    let view = HomeView {
-        title: "Welcome to RustMVC".to_string(),
-    };
-    ActionResult::View(Arc::new(view))
-}
-
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    let mut server = Server::new();
-
-    // Register routes
-    server.add_route("/", index);
-
-    // Start the server
-    server.start("127.0.0.1:8080").await
-}
-```
-
-## Core Concepts
-
-### Server
-
-The `Server` struct is the main entry point. Create a new server instance, register routes and middleware, then start it:
-
-```rust
-let mut server = Server::new();
-server.add_route("/about", about_controller);
-server.start("127.0.0.1:8080").await?;
-```
-
-### Routes
-
-Routes map URL paths to controller actions:
-
-```rust
-server.add_route("/users", list_users);
-server.add_route("/users/profile", user_profile);
-```
-
-### Request Context
-
-The `RequestContext` provides access to request information:
-
-```rust
-fn my_action(ctx: RequestContext) -> ActionResult {
-    // Access query parameters
-    let id = ctx.params.get("id");
-
-    // Access headers
-    let user_agent = ctx.headers.get("user-agent");
-
-    // Access request path
-    println!("Path: {}", ctx.path);
-
-    // Access request body
-    let body_data = &ctx.body;
-
-    ActionResult::Html("<h1>Hello</h1>".to_string())
-}
-```
-
-### Action Results
-
-Controllers return `ActionResult` which can be one of several types:
-
-```rust
-// Return HTML directly
-ActionResult::Html("<h1>Hello World</h1>".to_string())
-
-// Render a view/template
-ActionResult::View(Arc::new(my_view))
-
-// Redirect to another URL
-ActionResult::Redirect("/login".to_string())
-
-// Serve a static file from wwwroot/
-ActionResult::File("style.css".to_string())
-
-// Return 404
-ActionResult::NotFound
-```
-
-### Middleware
-
-Add middleware to intercept and process requests:
-
-```rust
-// Authentication middleware
-server.add_middleware(|ctx, next| {
-    if ctx.params.get("auth_token").is_some() {
-        next(ctx)
-    } else {
-        ActionResult::Redirect("/login".to_string())
-    }
-});
-
-// Custom logging middleware
-server.add_middleware(|ctx, next| {
-    let start = std::time::Instant::now();
-    let result = next(ctx);
-    let duration = start.elapsed();
-    println!("Request processed in {:?}", duration);
-    result
-});
-```
-
-Middlewares are executed in the order they are added.
-
-### Templates with Askama
-
-Create templates in the `templates/` directory:
-
-```html
-<!-- templates/home.html -->
-<!DOCTYPE html>
-<html>
-<head>
-    <title>{{ title }}</title>
-</head>
-<body>
-    <h1>{{ title }}</h1>
-</body>
-</html>
-```
-
-Define a view model:
-
-```rust
-#[derive(Template)]
-#[template(path = "home.html")]
-struct HomeView {
-    title: String,
-}
-
-impl rustmvc::RenderModel for HomeView {
-    fn render_html(&self) -> Result<String, askama::Error> {
-        self.render()
-    }
-}
-```
-
-Use it in your controller:
-
-```rust
-fn home(_ctx: RequestContext) -> ActionResult {
-    ActionResult::View(Arc::new(HomeView {
-        title: "My Website".to_string(),
-    }))
-}
-```
-
-### Static Files
-
-Place static files in the `wwwroot/` directory. They can be served using `ActionResult::File`:
-
-```rust
-fn serve_css(_ctx: RequestContext) -> ActionResult {
-    ActionResult::File("styles/main.css".to_string())
-}
-```
-
-## Project Structure
-
-```
-my-app/
-├── Cargo.toml
-├── src/
-│   └── main.rs
-├── templates/
-│   └── home.html
-└── wwwroot/
-    ├── css/
-    │   └── style.css
-    └── js/
-        └── app.js
-```
-
-## Example Application
-
-```rust
-use rustmvc::{Server, RequestContext, ActionResult, Template};
-use std::sync::Arc;
+use rustmvc::{
+    Server, ActionResult, RequestContext, HttpMethod, RouteRules, RenderModel, Template,
+};
 
 #[derive(Template)]
 #[template(path = "index.html")]
-struct IndexView {
+struct IndexTemplate {
     message: String,
 }
 
-impl rustmvc::RenderModel for IndexView {
+impl RenderModel for IndexTemplate {
     fn render_html(&self) -> Result<String, askama::Error> {
         self.render()
     }
 }
 
-fn index(_ctx: RequestContext) -> ActionResult {
-    ActionResult::View(Arc::new(IndexView {
-        message: "Welcome!".to_string(),
+fn home(ctx: RequestContext) -> ActionResult {
+    println!("Received request for {}", ctx.path);
+    ActionResult::View(std::sync::Arc::new(IndexTemplate {
+        message: "Welcome to RustMVC!".into(),
     }))
-}
-
-fn about(_ctx: RequestContext) -> ActionResult {
-    ActionResult::Html("<h1>About Us</h1>".to_string())
-}
-
-fn api_data(ctx: RequestContext) -> ActionResult {
-    let name = ctx.params.get("name").cloned().unwrap_or_default();
-    ActionResult::Html(format!("<p>Hello, {}</p>", name))
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let mut server = Server::new();
-
-    server.add_route("/", index);
-    server.add_route("/about", about);
-    server.add_route("/api/greet", api_data);
-
+    server.add_route("/", home, HttpMethod::GET, vec![]);
     server.start("127.0.0.1:8080").await
 }
 ```
 
-## License
+When you open **http://127.0.0.1:8080**, it will render the Askama template `index.html` with your message.
 
-MIT
+***
 
-## Contributing
+### Core Concepts
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+#### 1. RequestContext
+Represents the incoming HTTP request.
+You receive this as a parameter in every controller action.
+
+```rust
+pub struct RequestContext {
+    pub params: HashMap<String, String>,
+    pub headers: HeaderMap,
+    pub path: String,
+    pub body: Vec<u8>,
+    pub method: HttpMethod,
+    pub rules: Vec<RouteRules>,
+    pub user: Option<User>,
+}
+```
+
+You can access things like headers, query params, and body easily:
+
+```rust
+fn submit(ctx: RequestContext) -> ActionResult {
+    if let Some(token) = ctx.headers.get("Authorization") {
+        println!("Token: {:?}", token);
+    }
+    ActionResult::Ok("Form Submitted".to_string())
+}
+```
+
+***
+
+#### 2. ActionResult
+Every controller returns an **ActionResult**, which defines the HTTP response.
+
+```rust
+pub enum ActionResult {
+    Html(String),
+    View(ArcRenderModel),
+    Redirect(String),
+    File(String),
+    NotFound,
+    PayloadTooLarge(String),
+    UnAuthorized(String),
+    Forbidden(String),
+    Ok(String),
+    BadRequest(String),
+}
+```
+
+Examples:
+
+```rust
+ActionResult::Html("<h1>Hello World</h1>".to_string());
+ActionResult::Redirect("/login".to_string());
+ActionResult::File("logo.png".to_string());
+```
+
+***
+
+#### 3. Server
+
+Acts as the main entry point to your application.
+It stores the list of registered **routes**, **middlewares**, and **authentication configuration**.
+
+##### Create a new instance
+```rust
+let mut server = Server::new();
+```
+
+##### Add a route
+Each route maps a **path** and **HTTP method** to an **action function**.
+
+```rust
+server.add_route("/users", list_users, HttpMethod::GET, vec![RouteRules::AllowAnonymous]);
+server.add_route("/upload", upload_file, HttpMethod::POST, vec![RouteRules::RequestSizeLimit(1024 * 1024)]);
+```
+
+##### Start the server
+```rust
+server.start("127.0.0.1:8080").await?;
+```
+
+The server automatically matches routes, applies middlewares, and handles results.
+
+***
+
+#### 4. Middleware
+
+Middlewares are executed **in order** before the controller action runs.
+They can modify the request, log activity, or even return responses directly.
+
+```rust
+server.add_middleware(|ctx, next| {
+    println!("Middleware: {}", ctx.path);
+    let res = next(ctx);
+    println!("After response");
+    res
+});
+```
+
+You can stack multiple middlewares for logging, authentication, etc.
+For example, you could log timing or enforce a global header.
+
+***
+
+#### 5. RouteRules
+
+Rules allow attaching security or validation behavior to individual routes.
+
+```rust
+pub enum RouteRules {
+    Authorize,
+    AllowAnonymous,
+    Roles(Vec<String>),
+    RequestSizeLimit(usize),
+}
+```
+
+Usage examples:
+
+```rust
+// Public route
+server.add_route("/", home, HttpMethod::GET, vec![RouteRules::AllowAnonymous]);
+
+// Restricted by payload size
+server.add_route(
+    "/upload",
+    upload_action,
+    HttpMethod::POST,
+    vec![RouteRules::RequestSizeLimit(1024 * 1024)], // 1 MB
+);
+```
+
+***
+
+#### 6. RenderModel Trait
+
+Your view models (Askama templates) must implement the `RenderModel` trait.
+
+```rust
+pub trait RenderModel: Send + Sync {
+    fn render_html(&self) -> Result<String, askama::Error>;
+}
+```
+
+Example with Askama:
+
+```rust
+#[derive(Template)]
+#[template(path = "user.html")]
+struct UserTemplate {
+    name: String,
+}
+
+impl RenderModel for UserTemplate {
+    fn render_html(&self) -> Result<String, askama::Error> {
+        self.render()
+    }
+}
+
+fn show_user(_: RequestContext) -> ActionResult {
+    ActionResult::View(std::sync::Arc::new(UserTemplate {
+        name: "Lorenzo".to_string(),
+    }))
+}
+```
+
+***
+
+#### 7. Authentication (Optional)
+
+The server supports JWT-based authentication via an `AuthConfig` that can generate and validate tokens.
+This part can be extended by enabling the commented-out `set_auth_config` and validation logic.
+
+Example token generation:
+
+```rust
+let claims = Claims {
+    sub: "user123".into(),
+    roles: vec!["admin".into()],
+};
+let token = server.generate_token(claims, 3600);
+```
+
+***
+
+#### 8. File Serving
+
+Static files (like assets) are served from the `wwwroot` directory automatically when returned via `ActionResult::File`.
+
+```rust
+fn show_logo(_: RequestContext) -> ActionResult {
+    ActionResult::File("images/logo.png".into())
+}
+```
+
+***
+
+### Example Middleware Chain Execution Flow
+
+If you register:
+```rust
+server.add_middleware(logging_middleware);
+server.add_middleware(auth_middleware);
+```
+
+For any request, execution will be:
+
+```
+logging_middleware -> auth_middleware -> route_action -> response
+```
+
+This composition pattern makes feature layering (e.g., auth, logging, request limits) simple and modular.
+
+***
+
+### Example Folder Structure
+
+```
+project/
+│
+├── src/
+│   ├── main.rs
+│   ├── controllers/
+│   │   └── home.rs
+│   └── rustmvc/
+│       ├── mod.rs
+│       └── authentication.rs
+│
+├── templates/
+│   └── index.html
+│
+└── wwwroot/
+    ├── css/
+    ├── js/
+    └── images/
+```
+
+***
+
+### Summary
+
+RustMVC is ideal for:
+- Building lightweight, structured web servers in Rust
+- Integrating Askama templates for server-rendered pages
+- Managing middlewares, routing, and request contexts cleanly within Actix Web
+
+If you already use **Actix Web** and want structured controllers, type-safe views, and rule-based routing, RustMVC provides a great foundation.

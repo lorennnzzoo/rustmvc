@@ -16,14 +16,20 @@ mod config {
 async fn main() -> std::io::Result<()> {
     let mut server = Server::new();
 
-    server.add_middleware(move |ctx, next| {
+    server.add_middleware(move |mut ctx, next| {
         let auth_config = get_auth_config();
         if ctx.rules.contains(&Authorize) {
             match ctx.headers.get("Authorization") {
                 Some(auth_header) => {
                     let token = auth_header.to_str().unwrap_or("").replace("Bearer ", "");
                     match auth_config.validate_token(&token) {
-                        Ok(_) => next(ctx),
+                        Ok(token_data) => {
+                            ctx.user = Some(User {
+                                name: token_data.claims.sub,
+                                roles: token_data.claims.roles,
+                            });
+                            next(ctx)
+                        }
                         Err(_) => ActionResult::UnAuthorized("Invalid token".into()),
                     }
                 }
@@ -70,8 +76,12 @@ mod mock_database {
 mod routes {
     use rustmvc::{ActionResult, RequestContext};
 
-    pub fn home(_: RequestContext) -> ActionResult {
-        return ActionResult::Ok("You are authenticated".to_string());
+    pub fn home(ctx: RequestContext) -> ActionResult {
+        if let Some(user) = &ctx.user {
+            ActionResult::Ok(format!("Hello, {}!", user.name))
+        } else {
+            ActionResult::Ok("Hello, anonymous!".to_string())
+        }
     }
 }
 

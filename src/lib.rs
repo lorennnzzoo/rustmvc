@@ -32,8 +32,15 @@ pub struct RequestContext {
     pub method: HttpMethod,
     /// Rules that are set for the path
     pub rules: Vec<RouteRules>,
+    /// User context
+    pub user: Option<User>,
 }
-
+///User context
+#[derive(Clone)]
+pub struct User {
+    pub name: String,
+    pub roles: Vec<String>,
+}
 /// Represents the possible responses an action can return.
 #[derive(Clone)]
 pub enum ActionResult {
@@ -333,6 +340,7 @@ impl Server {
                             body: body.to_vec(),
                             method: mapped_methods,
                             rules: route_rules,
+                            user: None,
                         };
 
                         let result = srv.handle_request(ctx);
