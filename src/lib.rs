@@ -30,6 +30,8 @@ pub struct RequestContext {
     pub body: Vec<u8>,
     ///Http Method
     pub method: HttpMethod,
+    /// Rules that are set for the path
+    pub rules: Vec<RouteRules>,
 }
 
 /// Represents the possible responses an action can return.
@@ -181,12 +183,12 @@ impl Server {
         self.middlewares.push(Arc::new(mw));
     }
     /// Set Auth Config
-    pub fn set_auth_config(&mut self, config: AuthConfig) {
-        self.auth_config = Some(Arc::new(config));
-    }
-    pub fn get_auth_config(&self) -> Option<Arc<AuthConfig>> {
-        self.auth_config.clone()
-    }
+    // pub fn set_auth_config(&mut self, config: AuthConfig) {
+    //     self.auth_config = Some(Arc::new(config));
+    // }
+    // pub fn get_auth_config(&self) -> Option<Arc<AuthConfig>> {
+    //     self.auth_config.clone()
+    // }
     /// Helper to generate token from user-provided claims
     pub fn generate_token(&self, claims: Claims, expires_in_secs: i64) -> Option<String> {
         self.auth_config
@@ -231,21 +233,21 @@ impl Server {
             return ActionResult::NotFound;
         }
         // Check if a route with Authorize Rule has valid token passed
-        if route.rules.contains(&RouteRules::Authorize) {
-            let auth = match &self.auth_config {
-                Some(a) => a,
-                None => return ActionResult::UnAuthorized("No auth config".into()),
-            };
+        // if route.rules.contains(&RouteRules::Authorize) {
+        //     let auth = match &self.auth_config {
+        //         Some(a) => a,
+        //         None => return ActionResult::UnAuthorized("No auth config".into()),
+        //     };
 
-            if let Some(auth_header) = ctx.headers.get("Authorization") {
-                let token = auth_header.to_str().unwrap_or("").replace("Bearer ", "");
-                if auth.validate_token(&token).is_err() {
-                    return ActionResult::UnAuthorized("Invalid token".into());
-                }
-            } else {
-                return ActionResult::UnAuthorized("Missing token".into());
-            }
-        }
+        //     if let Some(auth_header) = ctx.headers.get("Authorization") {
+        //         let token = auth_header.to_str().unwrap_or("").replace("Bearer ", "");
+        //         if auth.validate_token(&token).is_err() {
+        //             return ActionResult::UnAuthorized("Invalid token".into());
+        //         }
+        //     } else {
+        //         return ActionResult::UnAuthorized("Missing token".into());
+        //     }
+        // }
 
         // Check route rules first
         for rule in route.rules.clone() {
@@ -317,12 +319,20 @@ impl Server {
                             _ => HttpMethod::NotSupported,
                         };
 
+                        let route_rules = match srv.routes.iter().find(|r| {
+                            r.path == req.path().to_string() && r.method == mapped_methods
+                        }) {
+                            Some(r) => r.rules.clone(),
+                            None => Vec::new(),
+                        };
+
                         let ctx = RequestContext {
                             path: req.path().to_string(),
                             headers: req.headers().clone(),
                             params,
                             body: body.to_vec(),
                             method: mapped_methods,
+                            rules: route_rules,
                         };
 
                         let result = srv.handle_request(ctx);

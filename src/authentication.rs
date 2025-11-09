@@ -10,7 +10,7 @@ pub struct Claims {
     pub roles: Vec<String>,
     pub exp: usize, // Unix timestamp
 }
-
+#[derive(Clone)]
 pub struct AuthConfig {
     pub secret: String,
 }
