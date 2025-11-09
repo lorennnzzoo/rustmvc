@@ -1,6 +1,6 @@
 [package]
 name = "rustmvc"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["lorenzo"]
 description = "A lightweight MVC framework for Rust"
@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/lorennnzzoo/rustmvc"
 homepage = "https://github.com/lorennnzzoo/rustmvc"
 documentation = "https://docs.rs/rustmvc"
-keywords = ["mvc", "web", "actix", "rust"]
+keywords = ["mvc", "web", "actix", "rust","webapi"]
 readme = "README.md"
 
 

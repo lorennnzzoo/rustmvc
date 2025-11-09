@@ -172,6 +172,7 @@ impl Server {
 
         server
     }
+
     /// Add a middleware to the server
     ///
     /// Middlewares are executed in the order they are added.
@@ -189,6 +190,21 @@ impl Server {
     {
         self.middlewares.push(Arc::new(mw));
     }
+
+    /// Add a static files middleware.
+    /// By default it uses 'wwwroot' folder
+    pub fn use_static_files(&mut self) {
+        let middleware = move |ctx: RequestContext, next: ActionFn| {
+            if ctx.method == HttpMethod::GET && ctx.path.contains('.') {
+                return ActionResult::File(ctx.path);
+            }
+
+            next(ctx)
+        };
+
+        self.add_middleware(middleware);
+    }
+
     /// Set Auth Config
     // pub fn set_auth_config(&mut self, config: AuthConfig) {
     //     self.auth_config = Some(Arc::new(config));
@@ -226,61 +242,51 @@ impl Server {
     }
     /// Internal function to handle an incoming request
     fn handle_request(&self, ctx: RequestContext) -> ActionResult {
-        let route = match self
-            .routes
-            .iter()
-            .find(|r| r.path == ctx.path && r.method == ctx.method)
-        {
-            Some(r) => r,
-            None => return ActionResult::NotFound,
-        };
+        let routes = self.routes.clone();
+        let route_handler: ActionFn = Arc::new(move |ctx: RequestContext| {
+            if let Some(route) = routes
+                .iter()
+                .find(|r| r.path == ctx.path && r.method == ctx.method)
+            {
+                if route.method == HttpMethod::NotSupported {
+                    return ActionResult::NotFound;
+                }
 
-        // Check NotSupported Routes
-        if route.method == HttpMethod::NotSupported {
-            return ActionResult::NotFound;
-        }
-        // Check if a route with Authorize Rule has valid token passed
-        // if route.rules.contains(&RouteRules::Authorize) {
-        //     let auth = match &self.auth_config {
-        //         Some(a) => a,
-        //         None => return ActionResult::UnAuthorized("No auth config".into()),
-        //     };
-
-        //     if let Some(auth_header) = ctx.headers.get("Authorization") {
-        //         let token = auth_header.to_str().unwrap_or("").replace("Bearer ", "");
-        //         if auth.validate_token(&token).is_err() {
-        //             return ActionResult::UnAuthorized("Invalid token".into());
-        //         }
-        //     } else {
-        //         return ActionResult::UnAuthorized("Missing token".into());
-        //     }
-        // }
-
-        // Check route rules first
-        for rule in route.rules.clone() {
-            match rule {
-                RouteRules::RequestSizeLimit(limit) => {
-                    if ctx.body.len() > limit {
-                        return ActionResult::PayloadTooLarge(format!(
-                            "Request to route '{}' exceeded the allowed size: {} bytes",
-                            route.path, limit
-                        ));
+                for rule in route.rules.clone() {
+                    if let RouteRules::RequestSizeLimit(limit) = rule {
+                        if ctx.body.len() > limit {
+                            return ActionResult::PayloadTooLarge(format!(
+                                "Request to route '{}' exceeded the allowed size: {} bytes",
+                                route.path, limit
+                            ));
+                        }
+                    } else if let RouteRules::Roles(roles) = rule {
+                        match &ctx.user {
+                            Some(user) => {
+                                let has_role = roles.iter().any(|r| user.roles.contains(r));
+                                if !has_role {
+                                    return ActionResult::UnAuthorized(
+                                        "You do not have the required role(s)".into(),
+                                    );
+                                }
+                            }
+                            None => (),
+                        }
                     }
                 }
-                _ => (),
-            }
-        }
 
-        // Compose middlewares
-        let mut next: ActionFn = route.action.clone();
+                (route.action)(ctx)
+            } else {
+                ActionResult::NotFound
+            }
+        });
+
+        let mut next = route_handler;
         for mw in self.middlewares.iter().rev() {
             let current_next = next.clone();
             let mw_clone = mw.clone();
-            next = Arc::new(move |ctx: RequestContext| -> ActionResult {
-                mw_clone(ctx, current_next.clone())
-            }) as ActionFn;
+            next = Arc::new(move |ctx: RequestContext| mw_clone(ctx, current_next.clone()));
         }
-
         next(ctx)
     }
     /// Start the server asynchronously
