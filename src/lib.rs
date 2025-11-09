@@ -3,6 +3,7 @@
 //! A lightweight MVC framework for Rust, built on top of Actix Web and Askama templates.
 //! Provides routing, middlewares, request context, and response handling.
 
+use crate::authentication::{AuthConfig, Claims};
 use actix_web::http::header::HeaderMap;
 use actix_web::http::Method;
 use actix_web::web::Bytes;
@@ -11,8 +12,6 @@ pub use askama;
 pub use askama::Template;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-use crate::authentication::{AuthConfig, Claims};
 pub mod authentication;
 
 /// Shared pointer to a type implementing the `RenderModel` trait.
@@ -52,6 +51,10 @@ pub enum ActionResult {
     UnAuthorized(String),
     /// Forbidden
     Forbidden(String),
+    /// Ok
+    Ok(String),
+    /// BadRequest
+    BadRequest(String),
 }
 /// Trait implemented by models that can render themselves to HTML.
 pub trait RenderModel: Send + Sync {
@@ -150,51 +153,12 @@ impl Server {
                 ActionResult::PayloadTooLarge(content) => println!("Response: {:?}", content),
                 ActionResult::Forbidden(content) => println!("Response: {:?}", content),
                 ActionResult::UnAuthorized(content) => println!("Response: {:?}", content),
+                ActionResult::Ok(content) => println!("Response: {:?}", content),
+                ActionResult::BadRequest(content) => println!("Response: {:?}", content),
             }
             println!("--- End of Request ---\n");
 
             result
-        });
-
-        let routes = server.routes.clone();
-
-        let auth_config = server.auth_config.clone();
-
-        server.add_middleware(move |ctx, next| {
-            for route in &routes {
-                if route.path == ctx.path {
-                    if route.rules.contains(&RouteRules::Authorize) {
-                        let auth = match &auth_config {
-                            Some(a) => a.clone(),
-                            None => return ActionResult::UnAuthorized("No auth config".into()),
-                        };
-
-                        if let Some(auth_header) = ctx.headers.get("Authorization") {
-                            let token = auth_header.to_str().unwrap_or("").replace("Bearer ", "");
-                            if let Ok(token_data) = auth.validate_token(&token) {
-                                if let Some(RouteRules::Roles(required_roles)) = route
-                                    .rules
-                                    .iter()
-                                    .find(|r| matches!(r, RouteRules::Roles(_)))
-                                {
-                                    let user_roles = &token_data.claims.roles;
-                                    if !required_roles.iter().all(|r| user_roles.contains(r)) {
-                                        return ActionResult::Forbidden(
-                                            "Forbidden: insufficient roles".into(),
-                                        );
-                                    }
-                                }
-                            } else {
-                                return ActionResult::UnAuthorized("Invalid token".into());
-                            }
-                        } else {
-                            return ActionResult::UnAuthorized("Missing token".into());
-                        }
-                    }
-                }
-            }
-
-            next(ctx)
         });
 
         server
@@ -265,6 +229,22 @@ impl Server {
         // Check NotSupported Routes
         if route.method == HttpMethod::NotSupported {
             return ActionResult::NotFound;
+        }
+        // Check if a route with Authorize Rule has valid token passed
+        if route.rules.contains(&RouteRules::Authorize) {
+            let auth = match &self.auth_config {
+                Some(a) => a,
+                None => return ActionResult::UnAuthorized("No auth config".into()),
+            };
+
+            if let Some(auth_header) = ctx.headers.get("Authorization") {
+                let token = auth_header.to_str().unwrap_or("").replace("Bearer ", "");
+                if auth.validate_token(&token).is_err() {
+                    return ActionResult::UnAuthorized("Invalid token".into());
+                }
+            } else {
+                return ActionResult::UnAuthorized("Missing token".into());
+            }
         }
 
         // Check route rules first
@@ -359,7 +339,10 @@ impl Server {
                                         .body(format!("<h1>Template Rendering Error: {}</h1>", e))
                                 }
                             },
-
+                            ActionResult::Ok(content) => HttpResponse::Ok().body(content),
+                            ActionResult::BadRequest(content) => {
+                                HttpResponse::BadRequest().body(content)
+                            }
                             ActionResult::Redirect(url) => HttpResponse::Found()
                                 .append_header(("Location", url))
                                 .finish(),
