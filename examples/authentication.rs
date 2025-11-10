@@ -39,13 +39,8 @@ async fn main() -> std::io::Result<()> {
             next(ctx)
         }
     });
-    server.add_route(
-        "/login",
-        providers::custom_provider,
-        HttpMethod::POST,
-        vec![AllowAnonymous],
-    );
-    server.add_route("/", routes::home, HttpMethod::GET, vec![Authorize]);
+    server.post("/login", providers::custom_provider, vec![AllowAnonymous]);
+    server.get("/", routes::home, vec![Authorize]);
     server.start("127.0.0.1:8080").await
 }
 

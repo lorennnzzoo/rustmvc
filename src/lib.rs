@@ -2,15 +2,14 @@
 //!
 //! A lightweight MVC framework for Rust, built on top of Actix Web and Askama templates.
 //! Provides routing, middlewares, request context, and response handling.
-
-use crate::authentication::{AuthConfig, Claims};
 use actix_web::http::header::HeaderMap;
-use actix_web::http::Method;
+use actix_web::http::{Method, StatusCode};
 use actix_web::web::Bytes;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 pub use askama;
 pub use askama::Template;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 pub mod authentication;
 
@@ -22,6 +21,8 @@ pub type ArcRenderModel = Arc<dyn RenderModel>;
 pub struct RequestContext {
     /// Query parameters from the URL (e.g., `/path?foo=bar` -> `{"foo": "bar"}`)
     pub params: HashMap<String, String>,
+    /// Path parameters from the URL (e.g., `/profile/{username} -> /profile/lorenzo `)
+    pub path_params: HashMap<String, String>,
     /// HTTP headers of the request
     pub headers: HeaderMap,
     /// The path of the request (e.g., `/about`)
@@ -64,12 +65,22 @@ pub enum ActionResult {
     Ok(String),
     /// BadRequest
     BadRequest(String),
+    /// Return Status Code with Body
+    StatusCode(u16, String),
 }
 /// Trait implemented by models that can render themselves to HTML.
 pub trait RenderModel: Send + Sync {
     /// Render the model into an HTML string
     fn render_html(&self) -> Result<String, askama::Error>;
 }
+
+/// Implemented for any Askama Template
+impl<T: askama::Template + Send + Sync> RenderModel for T {
+    fn render_html(&self) -> Result<String, askama::Error> {
+        self.render()
+    }
+}
+
 /// Type of an action function (controller handler)
 pub type ActionFn = Arc<dyn Fn(RequestContext) -> ActionResult + Send + Sync + 'static>;
 
@@ -123,8 +134,6 @@ pub struct Server {
     /// Middlewares are functions that wrap around route execution,
     /// allowing logging, authentication, request modification, etc.
     middlewares: Vec<MiddlewareFn>,
-    /// Auth Config to set secret key
-    auth_config: Option<Arc<AuthConfig>>,
 }
 
 impl Server {
@@ -138,7 +147,6 @@ impl Server {
         let mut server = Self {
             routes: Vec::new(),
             middlewares: Vec::new(),
-            auth_config: None,
         };
         // Default logging middleware
         server.add_middleware(|ctx, next| {
@@ -156,14 +164,15 @@ impl Server {
             match &result {
                 ActionResult::Html(_) => println!("Response: Html"),
                 ActionResult::View(_) => println!("Response: View"),
-                ActionResult::Redirect(url) => println!("Response: Redirect to {}", url),
-                ActionResult::File(path) => println!("Response: File {}", path),
+                ActionResult::Redirect(url) => println!("Response: Redirect to {:?}", url),
+                ActionResult::File(path) => println!("Response: File {:?}", path),
                 ActionResult::NotFound => println!("Response: NotFound"),
                 ActionResult::PayloadTooLarge(content) => println!("Response: {:?}", content),
                 ActionResult::Forbidden(content) => println!("Response: {:?}", content),
                 ActionResult::UnAuthorized(content) => println!("Response: {:?}", content),
                 ActionResult::Ok(content) => println!("Response: {:?}", content),
                 ActionResult::BadRequest(content) => println!("Response: {:?}", content),
+                ActionResult::StatusCode(code, body) => println!("Response: {:?} {:?}", code, body),
             }
             println!("--- End of Request ---\n");
 
@@ -172,7 +181,29 @@ impl Server {
 
         server
     }
+    fn match_and_extract_params(pattern: &str, path: &str) -> Option<HashMap<String, String>> {
+        let pattern_segments: Vec<&str> = pattern.split('/').collect();
+        let path_segments: Vec<&str> = path.split('/').collect();
 
+        if pattern_segments.len() != path_segments.len() {
+            return None;
+        }
+
+        let mut params = HashMap::new();
+
+        for (p_segment, r_segment) in pattern_segments.iter().zip(path_segments.iter()) {
+            if p_segment.starts_with('{') && p_segment.ends_with('}') {
+                // This is a dynamic parameter, extract the key and value
+                let key = p_segment.trim_matches(|c| c == '{' || c == '}').to_string();
+                params.insert(key, r_segment.to_string());
+            } else if p_segment != r_segment {
+                // Static segments must match exactly
+                return None;
+            }
+        }
+
+        Some(params)
+    }
     /// Add a middleware to the server
     ///
     /// Middlewares are executed in the order they are added.
@@ -204,19 +235,36 @@ impl Server {
 
         self.add_middleware(middleware);
     }
+    /// Register a route that only responds to HTTP GET requests.
+    pub fn get<F>(&mut self, path: &str, action: F, rules: Vec<RouteRules>)
+    where
+        F: Fn(RequestContext) -> ActionResult + Send + Sync + 'static,
+    {
+        self.add_route(path, action, HttpMethod::GET, rules);
+    }
 
-    /// Set Auth Config
-    // pub fn set_auth_config(&mut self, config: AuthConfig) {
-    //     self.auth_config = Some(Arc::new(config));
-    // }
-    // pub fn get_auth_config(&self) -> Option<Arc<AuthConfig>> {
-    //     self.auth_config.clone()
-    // }
-    /// Helper to generate token from user-provided claims
-    pub fn generate_token(&self, claims: Claims, expires_in_secs: i64) -> Option<String> {
-        self.auth_config
-            .as_ref()
-            .map(|cfg| cfg.generate_token(&claims.sub, claims.roles.clone(), expires_in_secs))
+    /// Register a route that only responds to HTTP POST requests.
+    pub fn post<F>(&mut self, path: &str, action: F, rules: Vec<RouteRules>)
+    where
+        F: Fn(RequestContext) -> ActionResult + Send + Sync + 'static,
+    {
+        self.add_route(path, action, HttpMethod::POST, rules);
+    }
+
+    /// Register a route that only responds to HTTP PUT requests.
+    pub fn put<F>(&mut self, path: &str, action: F, rules: Vec<RouteRules>)
+    where
+        F: Fn(RequestContext) -> ActionResult + Send + Sync + 'static,
+    {
+        self.add_route(path, action, HttpMethod::PUT, rules);
+    }
+
+    /// Register a route that only responds to HTTP DELETE requests.
+    pub fn delete<F>(&mut self, path: &str, action: F, rules: Vec<RouteRules>)
+    where
+        F: Fn(RequestContext) -> ActionResult + Send + Sync + 'static,
+    {
+        self.add_route(path, action, HttpMethod::DELETE, rules);
     }
     /// Register a route with the server
     ///
@@ -243,42 +291,81 @@ impl Server {
     /// Internal function to handle an incoming request
     fn handle_request(&self, ctx: RequestContext) -> ActionResult {
         let routes = self.routes.clone();
-        let route_handler: ActionFn = Arc::new(move |ctx: RequestContext| {
-            if let Some(route) = routes
-                .iter()
-                .find(|r| r.path == ctx.path && r.method == ctx.method)
-            {
-                if route.method == HttpMethod::NotSupported {
-                    return ActionResult::NotFound;
-                }
+        let route_handler: ActionFn = Arc::new(move |mut ctx: RequestContext| {
+            // if let Some(route) = routes
+            //     .iter()
+            //     .find(|r| r.path == ctx.path && r.method == ctx.method)
+            // {
+            //     if route.method == HttpMethod::NotSupported {
+            //         return ActionResult::NotFound;
+            //     }
 
-                for rule in route.rules.clone() {
-                    if let RouteRules::RequestSizeLimit(limit) = rule {
-                        if ctx.body.len() > limit {
-                            return ActionResult::PayloadTooLarge(format!(
-                                "Request to route '{}' exceeded the allowed size: {} bytes",
-                                route.path, limit
-                            ));
-                        }
-                    } else if let RouteRules::Roles(roles) = rule {
-                        match &ctx.user {
-                            Some(user) => {
-                                let has_role = roles.iter().any(|r| user.roles.contains(r));
-                                if !has_role {
-                                    return ActionResult::UnAuthorized(
-                                        "You do not have the required role(s)".into(),
-                                    );
-                                }
+            //     for rule in route.rules.clone() {
+            //         if let RouteRules::RequestSizeLimit(limit) = rule {
+            //             if ctx.body.len() > limit {
+            //                 return ActionResult::PayloadTooLarge(format!(
+            //                     "Request to route '{}' exceeded the allowed size: {} bytes",
+            //                     route.path, limit
+            //                 ));
+            //             }
+            //         } else if let RouteRules::Roles(roles) = rule {
+            //             match &ctx.user {
+            //                 Some(user) => {
+            //                     let has_role = roles.iter().any(|r| user.roles.contains(r));
+            //                     if !has_role {
+            //                         return ActionResult::UnAuthorized(
+            //                             "You do not have the required role(s)".into(),
+            //                         );
+            //                     }
+            //                 }
+            //                 None => (),
+            //             }
+            //         }
+            //     }
+
+            //     (route.action)(ctx)
+            // } else {
+            //     ActionResult::NotFound
+            // }
+            //
+            //
+
+            for route in routes.iter() {
+                if route.method != ctx.method {
+                    continue;
+                }
+                if let Some(path_params) = Server::match_and_extract_params(&route.path, &ctx.path)
+                {
+                    ctx.path_params = path_params;
+
+                    for rule in route.rules.clone() {
+                        if let RouteRules::RequestSizeLimit(limit) = rule {
+                            if ctx.body.len() > limit {
+                                return ActionResult::PayloadTooLarge(format!(
+                                    "Request to route '{}' exceeded the allowed size: {} bytes",
+                                    route.path, limit
+                                ));
                             }
-                            None => (),
+                        } else if let RouteRules::Roles(roles) = rule {
+                            match &ctx.user {
+                                Some(user) => {
+                                    let has_role = roles.iter().any(|r| user.roles.contains(r));
+                                    if !has_role {
+                                        return ActionResult::UnAuthorized(
+                                            "You do not have the required role(s)".into(),
+                                        );
+                                    }
+                                }
+                                None => (),
+                            }
                         }
                     }
-                }
 
-                (route.action)(ctx)
-            } else {
-                ActionResult::NotFound
+                    // Execute the action with the modified context
+                    return (route.action)(ctx);
+                }
             }
+            ActionResult::NotFound
         });
 
         let mut next = route_handler;
@@ -343,6 +430,7 @@ impl Server {
                             path: req.path().to_string(),
                             headers: req.headers().clone(),
                             params,
+                            path_params: HashMap::new(),
                             body: body.to_vec(),
                             method: mapped_methods,
                             rules: route_rules,
@@ -355,47 +443,67 @@ impl Server {
                             ActionResult::Html(s) => {
                                 HttpResponse::Ok().content_type("text/html").body(s)
                             }
+                            ActionResult::StatusCode(code, body) => {
+                                let valid_code = StatusCode::from_u16(code)
+                                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                                HttpResponse::build(valid_code)
+                                    .content_type("application/json")
+                                    .body(body)
+                            }
+
                             ActionResult::View(renderer_arc) => match renderer_arc.render_html() {
                                 Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
                                 Err(e) => {
                                     eprintln!("Askama Rendering Error: {}", e);
                                     HttpResponse::InternalServerError()
-                                        .body(format!("<h1>Template Rendering Error: {}</h1>", e))
+                                        .content_type("application/json")
+                                        .body(format!("Template Rendering Error: {}", e))
                                 }
                             },
-                            ActionResult::Ok(content) => HttpResponse::Ok().body(content),
-                            ActionResult::BadRequest(content) => {
-                                HttpResponse::BadRequest().body(content)
-                            }
+                            ActionResult::Ok(content) => HttpResponse::Ok()
+                                .content_type("application/json")
+                                .body(content),
+                            ActionResult::BadRequest(content) => HttpResponse::BadRequest()
+                                .content_type("application/json")
+                                .body(content),
                             ActionResult::Redirect(url) => HttpResponse::Found()
                                 .append_header(("Location", url))
                                 .finish(),
                             ActionResult::File(path) => {
-                                let path = format!("wwwroot/{}", path);
-                                match std::fs::read(&path) {
-                                    Ok(bytes) => {
-                                        let content_type =
-                                            mime_guess::from_path(&path).first_or_octet_stream();
-                                        HttpResponse::Ok()
-                                            .content_type(content_type.as_ref())
-                                            .body(bytes)
+                                let wwwroot = std::env::current_dir().unwrap().join("wwwroot");
+                                let requested = Path::new(&path);
+
+                                let file_path = wwwroot.join(requested).canonicalize();
+
+                                match file_path {
+                                    Ok(path) if path.starts_with(&wwwroot) => {
+                                        match std::fs::read(&path) {
+                                            Ok(bytes) => {
+                                                let content_type = mime_guess::from_path(&path)
+                                                    .first_or_octet_stream();
+                                                HttpResponse::Ok()
+                                                    .content_type(content_type.as_ref())
+                                                    .body(bytes)
+                                            }
+                                            Err(_) => HttpResponse::NotFound().body("Not found"),
+                                        }
                                     }
-                                    Err(_) => {
-                                        HttpResponse::NotFound().body("<h1>404 Not Found</h1>")
-                                    }
+                                    _ => HttpResponse::Forbidden().body("Access denied"),
                                 }
                             }
-                            ActionResult::PayloadTooLarge(body) => {
-                                HttpResponse::PayloadTooLarge().body(body)
-                            }
+                            ActionResult::PayloadTooLarge(body) => HttpResponse::PayloadTooLarge()
+                                .content_type("application/json")
+                                .body(body),
 
-                            ActionResult::Forbidden(body) => HttpResponse::Forbidden().body(body),
-                            ActionResult::UnAuthorized(body) => {
-                                HttpResponse::Unauthorized().body(body)
-                            }
-                            ActionResult::NotFound => {
-                                HttpResponse::NotFound().body("<h1>404 Not Found</h1>")
-                            }
+                            ActionResult::Forbidden(body) => HttpResponse::Forbidden()
+                                .content_type("application/json")
+                                .body(body),
+                            ActionResult::UnAuthorized(body) => HttpResponse::Unauthorized()
+                                .content_type("application/json")
+                                .body(body),
+                            ActionResult::NotFound => HttpResponse::NotFound()
+                                .content_type("application/json")
+                                .body("Not found"),
                         };
 
                         async move { body }
