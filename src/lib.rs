@@ -292,44 +292,6 @@ impl Server {
     fn handle_request(&self, ctx: RequestContext) -> ActionResult {
         let routes = self.routes.clone();
         let route_handler: ActionFn = Arc::new(move |mut ctx: RequestContext| {
-            // if let Some(route) = routes
-            //     .iter()
-            //     .find(|r| r.path == ctx.path && r.method == ctx.method)
-            // {
-            //     if route.method == HttpMethod::NotSupported {
-            //         return ActionResult::NotFound;
-            //     }
-
-            //     for rule in route.rules.clone() {
-            //         if let RouteRules::RequestSizeLimit(limit) = rule {
-            //             if ctx.body.len() > limit {
-            //                 return ActionResult::PayloadTooLarge(format!(
-            //                     "Request to route '{}' exceeded the allowed size: {} bytes",
-            //                     route.path, limit
-            //                 ));
-            //             }
-            //         } else if let RouteRules::Roles(roles) = rule {
-            //             match &ctx.user {
-            //                 Some(user) => {
-            //                     let has_role = roles.iter().any(|r| user.roles.contains(r));
-            //                     if !has_role {
-            //                         return ActionResult::UnAuthorized(
-            //                             "You do not have the required role(s)".into(),
-            //                         );
-            //                     }
-            //                 }
-            //                 None => (),
-            //             }
-            //         }
-            //     }
-
-            //     (route.action)(ctx)
-            // } else {
-            //     ActionResult::NotFound
-            // }
-            //
-            //
-
             for route in routes.iter() {
                 if route.method != ctx.method {
                     continue;
@@ -470,10 +432,17 @@ impl Server {
                                 .append_header(("Location", url))
                                 .finish(),
                             ActionResult::File(path) => {
-                                let wwwroot = std::env::current_dir().unwrap().join("wwwroot");
-                                let requested = Path::new(&path);
-
+                                let wwwroot = std::env::current_dir()
+                                    .unwrap()
+                                    .join("wwwroot")
+                                    .canonicalize()
+                                    .unwrap();
+                                let requested = Path::new(path.trim_start_matches(['/', '\\']));
                                 let file_path = wwwroot.join(requested).canonicalize();
+
+                                println!("wwwroot: {}", wwwroot.display());
+                                println!("requested path: {:?}", requested);
+                                println!("file_path: {:?}", file_path);
 
                                 match file_path {
                                     Ok(path) if path.starts_with(&wwwroot) => {
